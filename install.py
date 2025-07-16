@@ -50,18 +50,30 @@ class Shell:
             args = command[1:]
         child = pexpect.spawn(command[0], args)
 
-        if command[0] == 'sudo':
-            # it will prompt something like: "[sudo] password for < generic_user >:"
-            # you "expect" to receive a string containing keyword "password"
-            index = child.expect(['password', pexpect.EOF, pexpect.TIMEOUT])
-            # if it's found, send the password
-            if index == 0:
-                child.sendline(self._get_sudo_password())
+        buffer = b""
+        while True:
+            try:
+                if command[0] == 'sudo':
+                    # it will prompt something like: "[sudo] password for < generic_user >:"
+                    # you "expect" to receive a string containing keyword "password"
+                    if b"[sudo] password for " in buffer:
+                        child.sendline(self._get_sudo_password())
+                        buffer = b"" # reset buffer after sending password
 
-        return child.read()
+                # read a line from the child process
+                data = child.read_nonblocking(timeout=1)
+                if not data:
+                    break  # EOF reached
+                buffer += data
+            except pexpect.TIMEOUT:
+                continue
+            except pexpect.EOF:
+                break
+
+        return buffer
 
 def ensure_klipper_is_installed(shell: Shell):
-    if b"klipper.service" in shell.execute(["sudo", "systemctl", "list-units", "--full", "-all", "-t", "service", "--no-legend", "--no-pager"]):
+    if b"klipper.service" in shell.execute(["sudo", "systemctl", "list-unit-files", "klipper.service"]):
         print("Klipper service found!")
     else:
         print("Klipper service not found, please install Klipper first")
@@ -102,7 +114,7 @@ if __name__ == "__main__":
 
     # link macros to config folder (if not already done):
     macro_config_path = shell.klipper_config_path().joinpath("necessary-extension")
-    if not macro_config_path.exists():
+    if not macro_config_path.exists() and not macro_config_path.is_symlink():
         macro_config_path.symlink_to(shell.config_path().joinpath("macros"))
 
     extensions = [e for e in shell.source_path().iterdir() if e.is_file()]
